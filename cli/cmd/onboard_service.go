@@ -1,17 +1,13 @@
 package cmd
 
 import (
-	"encoding/base64"
+	"bytes"
 	"errors"
-	"fmt"
 	"os"
+	"text/template"
 
 	keptncommon "github.com/keptn/go-utils/pkg/lib/keptn"
 
-	apimodels "github.com/keptn/go-utils/pkg/api/models"
-	apiutils "github.com/keptn/go-utils/pkg/api/utils"
-	"github.com/keptn/keptn/cli/pkg/credentialmanager"
-	"github.com/keptn/keptn/cli/pkg/logging"
 	"github.com/keptn/keptn/cli/pkg/validator"
 	keptnutils "github.com/keptn/kubernetes-utils/pkg"
 	"github.com/spf13/cobra"
@@ -31,6 +27,7 @@ var serviceCmd = &cobra.Command{
 	Long: `Onboards a new service and its Helm chart to the provided project. 
 Therefore, this command takes a folder to a Helm chart or an already packed Helm chart as .tgz.
 `,
+	Deprecated: "please use \"create service\" and 'add-resource' instead.",
 	Example: `keptn onboard service SERVICENAME --project=PROJECTNAME --chart=FILEPATH
 
 keptn onboard service SERVICENAME --project=PROJECTNAME --chart=HELM_CHART.tgz
@@ -51,50 +48,42 @@ keptn onboard service SERVICENAME --project=PROJECTNAME --chart=HELM_CHART.tgz
 		if err := doOnboardServicePreRunChecks(args); err != nil {
 			return err
 		}
-		endPoint, apiToken, err := credentialmanager.NewCredentialManager(false).GetCreds(namespace)
-		if err != nil {
-			return errors.New(authErrorMsg)
-		}
-		logging.PrintLog("Starting to onboard service", logging.InfoLevel)
 
-		if endPointErr := checkEndPointStatus(endPoint.String()); endPointErr != nil {
-			return fmt.Errorf("Error connecting to server: %s"+endPointErrorReasons,
-				endPointErr)
+		data := struct {
+			CliPath string
+			Project string
+			Service string
+			HelmChartPath string
+		}{
+			os.Args[0],
+			*onboardServiceParams.Project,
+			args[0],
+			*onboardServiceParams.ChartFilePath,
 		}
 
-		chart, err := keptnutils.LoadChartFromPath(*onboardServiceParams.ChartFilePath)
+		msg := `This command is deprecated and no longer supported. Instead, please use: 
+
+{{.CliPath}} create service {{.Service}} --project={{.Project}}
+{{.CliPath}} add-resource --project={{.Project}} --all-stages --service={{.Service}} --resource={{.HelmChartPath}} --resourceUri=helm/{{.Service}}
+
+Please execute these commands sequentially.`
+
+		tmpl, err := template.New("msg").Parse(msg)
+
 		if err != nil {
 			return err
 		}
 
-		chartData, err := keptnutils.PackageChart(chart)
+		// store template in a Bytes Buffer
+		var tpl bytes.Buffer
+		err = tmpl.Execute(&tpl, data)
+
 		if err != nil {
 			return err
 		}
 
-		helmChart := base64.StdEncoding.EncodeToString(chartData)
-		service := apimodels.CreateService{
-			ServiceName: &args[0],
-			HelmChart:   helmChart,
-		}
-
-		apiHandler := apiutils.NewAuthenticatedAPIHandler(endPoint.String(), apiToken, "x-token", nil, endPoint.Scheme)
-		logging.PrintLog(fmt.Sprintf("Connecting to server %s", endPoint.String()), logging.VerboseLevel)
-
-		if !mocking {
-			_, err := apiHandler.CreateService(*onboardServiceParams.Project, service)
-			if err != nil {
-				logging.PrintLog("Onboard service was unsuccessful", logging.QuietLevel)
-				return fmt.Errorf("Onboard service was unsuccessful. %s", *err.Message)
-			}
-
-			logging.PrintLog("Service onboarded successfully", logging.InfoLevel)
-
-			return nil
-		}
-
-		logging.PrintLog("Skipping onboard service due to mocking flag set to true", logging.InfoLevel)
-		return nil
+		// return above message as an error - this will lead the CLI to respond with an exit code != 0
+		return errors.New(tpl.String())
 	},
 }
 
